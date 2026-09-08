@@ -102,3 +102,36 @@ class RunResult(StrictModel):
     provider: str
     model: str
     usage: list[dict] = Field(default_factory=list)
+
+
+class Refinement(StrictModel):
+    block_id: str
+    action: Literal["revise", "discuss"]
+    text: str
+    message: str
+    evidence_ids: list[str]
+
+
+class ReviewEvent(StrictModel):
+    id: str = Field(min_length=1, max_length=100)
+    version: int = Field(ge=0)
+    action: Literal["save", "ask", "undo", "restore", "publish"]
+    block_id: str = ""
+    text: str = Field(default="", max_length=4000)
+    facts: str = Field(default="", max_length=4000)
+    message: str = Field(default="", max_length=4000)
+    edits: dict[str, str] = Field(default_factory=dict)
+    facts_by_block: dict[str, str] = Field(default_factory=dict)
+
+
+class Workspace(StrictModel):
+    run_id: str
+    source_hash: str
+    version: int = 0
+    texts: dict[str, str]
+    supplements: dict[str, str]
+    conversations: dict[str, list[dict]] = Field(default_factory=dict)
+    undo: dict[str, list[dict]] = Field(default_factory=dict)
+    checks: dict[str, dict] = Field(default_factory=dict)
+    requests: dict[str, dict] = Field(default_factory=dict)
+    history: list[dict] = Field(default_factory=list)

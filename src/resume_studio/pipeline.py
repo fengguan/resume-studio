@@ -87,10 +87,16 @@ def run_pipeline(
             raise ContractError("审阅结果与本次职位不匹配。")
         old_supplements = json.loads((saved / "supplements.json").read_text())
         supplements = old_supplements | supplements
+        if sum(len(v) for v in supplements.values()) > 20000:
+            raise ContractError("补充事实过长，请控制在 20,000 字符以内。")
         pending_ids = {r.block_id for r in previous.risks if r.status == "pending"}
         for key, text in (edits or {}).items():
-            if key not in pending_ids or blocks[key].private:
-                raise ContractError("只能处理当前待核实的非隐私文本块。")
+            if (
+                key not in blocks
+                or blocks[key].private
+                or not (blocks[key].editable or key in pending_ids)
+            ):
+                raise ContractError("只能修改允许编辑的正文或待核实段落。")
             if (
                 not isinstance(text, str)
                 or any(c in text for c in ("\n", "\r", "\t"))
@@ -145,7 +151,7 @@ def run_pipeline(
                     after=text,
                     evidence_ids=[key],
                     requirement_ids=[],
-                    reason="用户处理待核实内容；已重新执行事实审校。",
+                    reason="用户在交互审阅中调整该段落；已重新执行事实审校。",
                 )
             draft = Draft(changes=list(changes.values()))
         else:

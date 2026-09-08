@@ -48,8 +48,27 @@ def test_result_and_resolution_in_page(monkeypatch, tmp_path, fake_model):
     assert app.session_state["result"].clean_available is False
     assert any(b.label == "下载 Word 修订对照版" for b in app.get("download_button"))
     assert app.warning
-    next(x for x in app.selectbox if x.label == "处理方式").select("删除该段")
-    next(b for b in app.button if b.label == "保存处理并重新审校").click().run(timeout=30)
+    import resume_studio.review_ui
+    from resume_studio.schemas import ReviewEvent
+    from resume_studio.workspace import ReviewWorkspace
+
+    result = app.session_state["result"]
+    workspace = ReviewWorkspace(result)
+    key = next(r.block_id for r in result.risks if r.status == "pending" and r.origin != "system")
+    event = ReviewEvent(id="ui-delete", version=0, action="save", block_id=key, text="")
+    monkeypatch.setattr(
+        resume_studio.review_ui,
+        "_component",
+        lambda **kwargs: (
+            event.model_dump() if kwargs["payload"]["run_id"] == result.run_id else None
+        ),
+    )
+    app.run(timeout=30)
+    assert not app.exception
+    assert ReviewWorkspace(result).load().texts[key] == ""
+    assert not app.get("download_button")
+    event = ReviewEvent(id="ui-publish", version=workspace.load().version, action="publish")
+    app.run(timeout=30)
     assert not app.exception
     assert app.session_state["result"].clean_available is True
     assert app.success
