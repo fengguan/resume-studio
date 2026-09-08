@@ -61,7 +61,9 @@ def test_native_request_and_response(provider):
                 assert request.url.path == "/chat/completions"
                 assert request.headers["authorization"] == "Bearer TOP-SECRET"
                 assert data["response_format"] == {"type": "json_object"}
+                assert data["thinking"] == {"type": "disabled"}
                 assert "JSON" in data["messages"][0]["content"]
+                assert '"properties"' in data["messages"][0]["content"]
         return httpx.Response(200, json=envelope(provider, '{"changes":[]}'))
 
     client = LLMClient(

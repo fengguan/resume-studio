@@ -130,12 +130,20 @@ class LLMClient:
                 "messages": [
                     {
                         "role": "system",
-                        "content": system
-                        + "\nReturn one valid JSON object only; do not include Markdown or commentary.",
+                        "content": (
+                            system
+                            + "\nReturn one valid JSON object only; do not include Markdown or commentary."
+                            + " The JSON must match this exact schema (use these field names and types;"
+                            + " do not add fields): "
+                            + json.dumps(schema, ensure_ascii=False, separators=(",", ":"))
+                        ),
                     },
                     {"role": "user", "content": user},
                 ],
                 "response_format": {"type": "json_object"},
+                # V4 Flash defaults to high-effort thinking. Resume stages need
+                # a fast, schema-validated JSON response and do not need CoT.
+                "thinking": {"type": "disabled"},
                 "max_tokens": c.max_tokens,
                 "stream": False,
             }
