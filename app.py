@@ -8,7 +8,9 @@ from dotenv import load_dotenv
 from resume_studio.llm import PROVIDERS, LLMClient, ModelConfig
 from resume_studio.parsing import InputError, parse_job, parse_resume
 from resume_studio.pipeline import run_pipeline
+from resume_studio.review_ui import interactive_review
 from resume_studio.revisions import export_saved_comparison
+from resume_studio.workspace import load_result
 
 load_dotenv()
 ROOT = Path(__file__).resolve().parent
@@ -53,7 +55,7 @@ provider, model, secret, pages = client_config()
 st.title("Resume Studio")
 st.write("让真实经历回应职位需求。上传 Word 简历与职位 JSON，查看修改依据与待核实内容。")
 
-source_mode = st.radio("输入方式", ["上传文件", "使用本地样本"], horizontal=True)
+source_mode = st.radio("输入方式", ["上传文件", "使用本地样本", "继续已有结果"], horizontal=True)
 resume_bytes, job_bytes = None, None
 if source_mode == "上传文件":
     left, right = st.columns(2)
@@ -65,7 +67,7 @@ if source_mode == "上传文件":
         job_file = st.file_uploader("职位描述", type=["json"])
     if resume_file and job_file:
         resume_bytes, job_bytes = resume_file.getvalue(), job_file.getvalue()
-else:
+elif source_mode == "使用本地样本":
     resume_files = sorted((ROOT / ".data").glob("*.docx"))
     job_files = sorted((ROOT / ".data").rglob("*.json"))
     if resume_files and job_files:
@@ -75,10 +77,34 @@ else:
     else:
         st.info("没有找到本地样本，请上传文件。")
 
-fingerprint = hashlib.sha256((resume_bytes or b"") + (job_bytes or b"")).hexdigest()
-if st.session_state.get("input_fingerprint") != fingerprint:
-    st.session_state.pop("result", None)
-    st.session_state["input_fingerprint"] = fingerprint
+if source_mode == "继续已有结果":
+    saved = sorted((ROOT / "outputs").glob("*/result.json"), reverse=True)
+    if saved:
+        chosen = st.selectbox("已保存版本", saved, format_func=lambda p: p.parent.name)
+        if st.session_state.get("opened_result") != str(chosen):
+            try:
+                st.session_state["result"] = load_result(chosen.parent)
+                st.session_state["opened_result"] = str(chosen)
+            except (ValueError, OSError) as exc:
+                st.session_state.pop("result", None)
+                st.error(f"无法打开此版本：{exc}")
+        active = st.session_state.get("result")
+        if active:
+            resume_bytes = (Path(active.output_dir) / "source_resume.docx").read_bytes()
+            job_bytes = (Path(active.output_dir) / "job.json").read_bytes()
+    else:
+        st.info("还没有已保存的结果。请先上传文件生成简历。")
+        st.session_state.pop("result", None)
+else:
+    st.session_state.pop("opened_result", None)
+    fingerprint = hashlib.sha256((resume_bytes or b"") + (job_bytes or b"")).hexdigest()
+    if (
+        st.session_state.get("input_fingerprint") != fingerprint
+        or st.session_state.get("last_source_mode") == "继续已有结果"
+    ):
+        st.session_state.pop("result", None)
+        st.session_state["input_fingerprint"] = fingerprint
+st.session_state["last_source_mode"] = source_mode
 
 resume, job = None, None
 if resume_bytes and job_bytes:
@@ -95,7 +121,9 @@ if resume_bytes and job_bytes:
     except InputError as exc:
         st.error(str(exc))
 
-if st.button("生成调整简历", type="primary", disabled=not (resume and job)):
+if st.button(
+    "生成调整简历", type="primary", disabled=not (resume and job) or source_mode == "继续已有结果"
+):
     try:
         client = LLMClient(ModelConfig(provider, model, secret))
         with st.status("正在处理…", expanded=True) as status:
@@ -118,7 +146,7 @@ if result is not None and resume is not None:
     st.divider()
     pending = [r for r in result.risks if r.status == "pending"]
     m1, m2, m3 = st.columns(3)
-    m1.metric("待核实", len(pending))
+    m1.metric("已保存版本 · 待核实", len(pending))
     m2.metric("已处理 / 回退", len(result.risks) - len(pending))
     m3.metric("保留的改动", sum(b.text != result.final_text[b.id] for b in resume.blocks))
     if not result.audit_complete:
@@ -127,136 +155,50 @@ if result is not None and resume is not None:
     elif pending:
         st.warning("有待核实内容。Word 审阅版已添加高亮与批注，请先处理疑点。")
     else:
-        st.success("事实审校已完成，未发现未解决的具体疑点。请核对最终文档。")
-    st.info(result.layout["message"])
-    path = Path(result.output_dir)
-    d0, d1, d2, d3 = st.columns(4)
-    comparison_path = path / "resume_comparison.docx"
+        st.success("已保存版本的事实审校已完成，未发现未解决的具体疑点。请核对最终文档。")
+    if flash := st.session_state.pop("review_flash", None):
+        (st.success if result.audit_complete else st.warning)(flash)
+    st.subheader("交互审阅")
     try:
-        if not comparison_path.exists():
-            export_saved_comparison(path)
-        d0.download_button(
-            "下载 Word 修订对照版",
-            comparison_path.read_bytes(),
-            file_name="resume_comparison.docx",
-            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        )
+        dirty = interactive_review(result, lambda: LLMClient(ModelConfig(provider, model, secret)))
     except (ValueError, RuntimeError, OSError) as exc:
-        d0.error(f"修订对照暂不可用：{exc}")
-    d1.download_button(
-        "下载带批注审阅版",
-        (path / "resume_review.docx").read_bytes(),
-        file_name="resume_review.docx",
-        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    )
-    d2.download_button(
-        "下载修改说明",
-        (path / "comments.md").read_bytes(),
-        file_name="comments.md",
-        mime="text/markdown",
-    )
-    if result.clean_available:
-        d3.download_button(
-            "下载无标注简历",
-            (path / "tailored_resume.docx").read_bytes(),
-            file_name="tailored_resume.docx",
-            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        st.error(f"交互审阅暂不可用：{exc}")
+        dirty = True
+    path = Path(result.output_dir)
+    st.caption(f"当前版本 {result.run_id} · 模型 {result.provider} / {result.model}")
+    if dirty:
+        st.warning(
+            "当前有尚未全文审校的草稿。请在预览中点击“审校并生成新版本”，完成后下载与预览一致的文件。"
         )
-    st.caption(f"已保存在 {path} · 本次模型 {result.provider} / {result.model}")
-
-    risks_tab, changes_tab, report_tab = st.tabs(["疑点与处理", "改写对照", "完整说明"])
-    with risks_tab:
-        if not result.risks:
-            st.write("本次未发现具体事实风险。")
-        originals = {b.id: b.text for b in resume.blocks}
-        for risk in sorted(result.risks, key=lambda r: r.status != "pending"):
-            label = {
-                "pending": "待核实",
-                "reverted": "已拦截/回退",
-                "resolved": "已处理并复核",
-                "deleted": "已删除",
-            }[risk.status]
-            with st.expander(
-                f"{risk.id} · {label} · {risk.reason}", expanded=risk.status == "pending"
-            ):
-                st.caption(
-                    f"{risk.block_id} · {'原文已有疑点' if risk.origin == 'source' else '生成与审校'}"
-                )
-                st.text("问题表述：" + risk.quote)
-                st.text("原文依据：" + risk.source_text)
-                st.write("建议：" + risk.suggestion)
-                st.text("当前正文：" + (result.final_text[risk.block_id] or "（已删除）"))
-        if pending:
-            st.subheader("处理待核实内容")
-            st.caption(
-                "每次处理一个段落，随后重新分析与审校全文；新结果单独保存。恢复原文不会自动消除原文本身的疑点。"
+    else:
+        st.caption("下方文件对应已审校并保存的版本。编辑框中尚未保存的输入，请先审校生成新版本。")
+        st.info(result.layout["message"])
+        d0, d1, d2, d3 = st.columns(4)
+        comparison_path = path / "resume_comparison.docx"
+        try:
+            if not comparison_path.exists():
+                export_saved_comparison(path)
+            d0.download_button(
+                "下载 Word 修订对照版",
+                comparison_path.read_bytes(),
+                file_name="resume_comparison.docx",
             )
-            pending_blocks = list(
-                dict.fromkeys(r.block_id for r in pending if r.origin != "system")
-            )
-            with st.form(f"resolve_{result.run_id}"):
-                if pending_blocks:
-                    block_id = st.selectbox(
-                        "待核实段落",
-                        pending_blocks,
-                        format_func=lambda key: (result.final_text[key] or originals[key])[:100],
-                    )
-                    action = st.selectbox(
-                        "处理方式", ["恢复原文", "删除该段", "填写修订正文并补充事实"]
-                    )
-                    edited = st.text_area("修订正文（仅第三种方式需要；保持单段文字）")
-                    facts = st.text_area(
-                        "补充事实（实际经历、指标定义或证书状态；仅第三种方式需要）"
-                    )
-                else:
-                    block_id, action, edited, facts = None, None, "", ""
-                submitted = st.form_submit_button(
-                    "保存处理并重新审校" if pending_blocks else "重试全文审校"
-                )
-            if submitted:
-                try:
-                    edits, supplements = {}, {}
-                    if block_id:
-                        if action == "恢复原文":
-                            edits[block_id] = originals[block_id]
-                        elif action == "删除该段":
-                            edits[block_id] = ""
-                        else:
-                            if not edited.strip() or not facts.strip():
-                                raise ValueError("请填写修订正文和具体补充事实。")
-                            edits[block_id], supplements[block_id] = edited.strip(), facts.strip()
-                    client = LLMClient(ModelConfig(provider, model, secret))
-                    with st.status("正在重新审校…", expanded=True):
-                        revised = run_pipeline(
-                            resume_bytes,
-                            job_bytes,
-                            client,
-                            ROOT / "outputs",
-                            progress=st.write,
-                            target_pages=pages,
-                            previous=result,
-                            edits=edits,
-                            supplements=supplements,
-                        )
-                    st.session_state["result"] = revised
-                    st.rerun()
-                except (ValueError, RuntimeError, OSError) as exc:
-                    st.error(f"处理未完成：{exc}")
-    with changes_tab:
-        st.info(
-            "想在原位置查看修改？下载上方的 Word 修订对照版，在 Word 的“审阅”中选择“所有标记”，"
-            "即可查看新增与删除，并逐处接受或拒绝。风险提示仍保留为批注；在 Word 中接受修订不会自动解决应用中的待核实项。"
+        except (ValueError, RuntimeError, OSError) as exc:
+            d0.error(f"修订对照暂不可用：{exc}")
+        d1.download_button(
+            "下载带批注审阅版",
+            (path / "resume_review.docx").read_bytes(),
+            file_name="resume_review.docx",
         )
-        for block in resume.blocks:
-            final = result.final_text[block.id]
-            if final != block.text:
-                with st.expander(block.id, expanded=True):
-                    before, after = st.columns(2)
-                    before.caption("原文")
-                    before.text(block.text)
-                    after.caption("当前改写")
-                    after.text(final or "（已删除）")
-        with st.expander("调用用量"):
-            st.json(result.usage)
-    with report_tab:
+        d2.download_button(
+            "下载修改说明", (path / "comments.md").read_bytes(), file_name="comments.md"
+        )
+        if result.clean_available:
+            d3.download_button(
+                "下载无标注简历",
+                (path / "tailored_resume.docx").read_bytes(),
+                file_name="tailored_resume.docx",
+            )
+    with st.expander("已保存版本的完整审校记录与修改说明"):
         st.markdown((path / "comments.md").read_text(encoding="utf-8"))
+        st.json(result.usage)
