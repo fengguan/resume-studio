@@ -186,16 +186,29 @@ def run_pipeline(
             progress("独立审校全部正文" if not iteration else "复核回退后的最终正文")
             review_ids = [b.id for b in resume.blocks if not b.private and final_text[b.id].strip()]
             try:
-                audit = client.generate(
-                    "audit",
-                    prompts.AUDIT,
-                    base
-                    | {
-                        "candidate": model_blocks(resume, final_text),
-                        "review_block_ids": review_ids,
-                    },
-                    Audit,
-                )
+                audit_payload = base | {
+                    "candidate": model_blocks(resume, final_text),
+                    "review_block_ids": review_ids,
+                }
+                # DeepSeek JSON mode can return an empty or partial verdict list
+                # for a long one-shot audit. Smaller independently checked batches
+                # preserve the same coverage contract and are easier for the model
+                # to complete reliably.
+                if client.config.provider == "deepseek" and len(review_ids) > 10:
+                    verdicts = []
+                    for offset in range(0, len(review_ids), 10):
+                        chunk_ids = review_ids[offset : offset + 10]
+                        chunk = client.generate(
+                            "audit",
+                            prompts.AUDIT,
+                            audit_payload | {"review_block_ids": chunk_ids},
+                            Audit,
+                        )
+                        check_audit(chunk, final_text, chunk_ids)
+                        verdicts.extend(chunk.verdicts)
+                    audit = Audit(verdicts=verdicts)
+                else:
+                    audit = client.generate("audit", prompts.AUDIT, audit_payload, Audit)
                 check_audit(audit, final_text, review_ids)
                 dump(work / f"audit_{iteration + 1}.json", audit)
                 semantic = audit_risks(audit, resume, final_text)
