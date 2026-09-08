@@ -123,8 +123,16 @@ class LLMClient:
             headers["Authorization"] = f"Bearer {c.api_key}"
             body = {
                 "model": c.model,
+                # DeepSeek JSON mode rejects requests unless the prompt explicitly
+                # mentions JSON. Keep the schema validation local because this API
+                # accepts json_object rather than the stricter schema envelope used
+                # by the other providers.
                 "messages": [
-                    {"role": "system", "content": system},
+                    {
+                        "role": "system",
+                        "content": system
+                        + "\nReturn one valid JSON object only; do not include Markdown or commentary.",
+                    },
                     {"role": "user", "content": user},
                 ],
                 "response_format": {"type": "json_object"},
