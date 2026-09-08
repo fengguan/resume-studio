@@ -1,6 +1,6 @@
 # Resume Studio
 
-本地运行的简历调整应用。输入原始 DOCX 和职位 JSON，使用 OpenAI、Gemini 或 Claude 改写，再通过规则检查与独立模型审校生成 Word 审阅版及中文修改说明。
+本地运行的简历调整应用。输入原始 DOCX 和职位 JSON，使用 OpenAI、Gemini、Claude 或 DeepSeek 改写，再通过规则检查与独立模型审校生成 Word 审阅版及中文修改说明。
 
 **事实准确优先：明确违规会回退，疑似问题会在 Word 中高亮并添加批注。存在待核实问题或事实审校未完成时，不提供无标注简历。**
 
@@ -24,7 +24,7 @@ python3 -m venv .venv
 
 如果 Linux/WSL 缺少 `ensurepip`，安装对应的 `python3-venv` 系统包，或使用已安装的 `python3 -m virtualenv .venv`。Windows 可使用 `.venv\Scripts\python -m streamlit run app.py --server.address 127.0.0.1`。
 
-## 配置 OpenAI / Gemini / Claude
+## 配置 OpenAI / Gemini / Claude / DeepSeek
 
 在侧栏选择服务、填写模型 ID 和 API 密钥，或者复制 `.env.example` 为 `.env`：
 
@@ -36,17 +36,20 @@ GEMINI_API_KEY=你的密钥
 GEMINI_MODEL=你的账户可用的模型ID
 ANTHROPIC_API_KEY=你的密钥
 ANTHROPIC_MODEL=你的账户可用的模型ID
+DEEPSEEK_API_KEY=你的密钥
+DEEPSEEK_MODEL=你的账户可用的模型ID
 ```
 
 只需填写准备使用的服务。模型须支持对应服务的结构化 JSON 输出；不硬编码模型名称或默默切换服务。页面填写的密钥仅存在当前进程/会话中，不写入运行产物；环境变量优先于 `.env`。
 
-三家使用各自原生接口，非模拟的统一兼容接口：
+四家使用各自原生接口，非模拟的统一兼容接口：
 
 | 服务 | 接口与输出约束 | 官方文档 |
 | --- | --- | --- |
 | OpenAI | `POST /v1/responses`，`text.format` JSON schema，`store=false` | [Structured outputs](https://developers.openai.com/api/docs/guides/structured-outputs) |
 | Gemini | `POST /v1beta/models/{model}:generateContent`，`responseMimeType` / `responseJsonSchema` | [Generate content API](https://ai.google.dev/api/generate-content) |
 | Claude | `POST /v1/messages`，`output_config.format` JSON schema | [Structured outputs](https://platform.claude.com/docs/en/build-with-claude/structured-outputs) |
+| DeepSeek | `POST /chat/completions`，`response_format: {"type":"json_object"}`，随后由本地 Pydantic 校验具体结构 | [JSON Output](https://api-docs.deepseek.com/guides/json_mode/) |
 
 普通运行包括职位分析、改写和全文审校。发现违规并回退后会追加一次审校。请求超时/限流最多尝试三次，非法结构化输出最多重新请求一次；截断、拒绝或审校覆盖不完整都不会标记为通过。API 调用可能产生费用，实际 token 用量保存于运行记录中。
 
@@ -117,7 +120,7 @@ workspace.json          交互草稿、补充事实、段落对话、撤销记�
 - `job` 对象须含 `title`、`company`，以及 `responsibilities`、`skills` 或 `qualifications` 中至少一项文字数组。五份现有 JSON 均有解析回归覆盖，额外新闻与平台评分不参与候选人事实判断。
 - 页数目标是检查阈值，当前不会为了压页自动缩小字号或循环改写。可选安装 LibreOffice（`libreoffice` / `soffice` 命令）进行 PDF 页数检查；缺失时明确显示“未验证分页”。PDF 检查不是视觉验收，也不保证所有招聘系统的解析效果。
 - 全部风险必须能定位才会接受审校结果。当前同一段只输出一个最高优先级语义审校结论，规则检查可补充多项风险；处理后再次全文审校。
-- 交互功能已验证模拟模型的完整浏览器流程及已有本地结果的加载；三家原生 API 适配沿用已有实现。本次没有进行三家真实模型的质量/费用对比，也没有在 Word 桌面版验收最终分页。
+- 交互功能已验证模拟模型的完整浏览器流程及已有本地结果的加载；四家原生 API 适配沿用已有实现。本次没有进行四家真实模型的质量/费用对比，也没有在 Word 桌面版验收最终分页。
 
 ## 命令行
 

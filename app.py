@@ -53,7 +53,9 @@ def client_config():
 
 provider, model, secret, pages = client_config()
 st.title("Resume Studio")
-st.write("让真实经历回应职位需求。上传 Word 简历与职位 JSON，查看修改依据与待核实内容。")
+st.write(
+    "让真实经历回应职位需求。上传 Word 简历与职位 JSON，查看修改依据与待核实内容。支持 OpenAI、Gemini、Claude 和 DeepSeek。"
+)
 
 source_mode = st.radio("输入方式", ["上传文件", "使用本地样本", "继续已有结果"], horizontal=True)
 resume_bytes, job_bytes = None, None

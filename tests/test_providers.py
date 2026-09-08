@@ -26,6 +26,11 @@ def envelope(provider, text):
             ],
             "usageMetadata": {"promptTokenCount": 5},
         }
+    if provider == "deepseek":
+        return {
+            "choices": [{"finish_reason": "stop", "message": {"content": text}}],
+            "usage": {"prompt_tokens": 5},
+        }
     return {
         "stop_reason": "end_turn",
         "content": [{"type": "text", "text": text}],
@@ -33,7 +38,7 @@ def envelope(provider, text):
     }
 
 
-@pytest.mark.parametrize("provider", ["openai", "gemini", "claude"])
+@pytest.mark.parametrize("provider", ["openai", "gemini", "claude", "deepseek"])
 def test_native_request_and_response(provider):
     def handler(request):
         data = json.loads(request.content)
@@ -48,9 +53,14 @@ def test_native_request_and_response(provider):
             assert data["generationConfig"]["responseMimeType"] == "application/json"
             assert data["generationConfig"]["responseJsonSchema"]["additionalProperties"] is False
         else:
-            assert request.url.path == "/v1/messages"
-            assert request.headers["x-api-key"] == "TOP-SECRET"
-            assert data["output_config"]["format"]["type"] == "json_schema"
+            if provider == "claude":
+                assert request.url.path == "/v1/messages"
+                assert request.headers["x-api-key"] == "TOP-SECRET"
+                assert data["output_config"]["format"]["type"] == "json_schema"
+            else:
+                assert request.url.path == "/chat/completions"
+                assert request.headers["authorization"] == "Bearer TOP-SECRET"
+                assert data["response_format"] == {"type": "json_object"}
         return httpx.Response(200, json=envelope(provider, '{"changes":[]}'))
 
     client = LLMClient(
@@ -61,15 +71,17 @@ def test_native_request_and_response(provider):
     assert "TOP-SECRET" not in repr(client.config)
 
 
-@pytest.mark.parametrize("provider", ["openai", "gemini", "claude"])
+@pytest.mark.parametrize("provider", ["openai", "gemini", "claude", "deepseek"])
 def test_truncation_is_not_success(provider):
     data = envelope(provider, '{"changes":[]}')
     if provider == "openai":
         data["status"] = "incomplete"
     elif provider == "gemini":
         data["candidates"][0]["finishReason"] = "MAX_TOKENS"
-    else:
+    elif provider == "claude":
         data["stop_reason"] = "max_tokens"
+    else:
+        data["choices"][0]["finish_reason"] = "length"
     client = LLMClient(
         ModelConfig(provider, "test", "secret"),
         httpx.MockTransport(lambda r: httpx.Response(200, json=data)),
@@ -106,7 +118,7 @@ def test_invalid_json_schema_response_retries_once():
     assert len(calls) == 2
 
 
-@pytest.mark.parametrize("provider", ["openai", "gemini", "claude"])
+@pytest.mark.parametrize("provider", ["openai", "gemini", "claude", "deepseek"])
 def test_full_file_pipeline_through_native_adapter(provider, resume_bytes, job_bytes, tmp_path):
     from resume_studio.pipeline import run_pipeline
 
@@ -118,8 +130,10 @@ def test_full_file_pipeline_through_native_adapter(provider, resume_bytes, job_b
             payload = json.loads(body["input"])
         elif provider == "gemini":
             payload = json.loads(body["contents"][0]["parts"][0]["text"])
-        else:
+        elif provider == "claude":
             payload = json.loads(body["messages"][0]["content"])
+        else:
+            payload = json.loads(body["messages"][1]["content"])
         if "review_block_ids" in payload:
             stages.append("audit")
             response = {

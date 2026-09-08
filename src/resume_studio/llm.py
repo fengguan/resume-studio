@@ -19,6 +19,7 @@ PROVIDERS = {
         "https://generativelanguage.googleapis.com/v1beta",
     ),
     "claude": ("Claude", "ANTHROPIC_API_KEY", "ANTHROPIC_MODEL", "https://api.anthropic.com/v1"),
+    "deepseek": ("DeepSeek", "DEEPSEEK_API_KEY", "DEEPSEEK_MODEL", "https://api.deepseek.com"),
 }
 
 
@@ -36,7 +37,7 @@ class ModelConfig:
 
     def __post_init__(self):
         if self.provider not in PROVIDERS:
-            raise ModelError("请选择 OpenAI、Gemini 或 Claude。")
+            raise ModelError("请选择 OpenAI、Gemini、Claude 或 DeepSeek。")
         self.model = self.model.strip()
         self.api_key = self.api_key.strip()
         if not self.model or not self.api_key:
@@ -107,7 +108,7 @@ class LLMClient:
                     "maxOutputTokens": c.max_tokens,
                 },
             }
-        else:
+        elif c.provider == "claude":
             url = base + "/messages"
             headers.update({"x-api-key": c.api_key, "anthropic-version": "2023-06-01"})
             body = {
@@ -116,6 +117,19 @@ class LLMClient:
                 "max_tokens": c.max_tokens,
                 "messages": [{"role": "user", "content": user}],
                 "output_config": {"format": {"type": "json_schema", "schema": schema}},
+            }
+        else:
+            url = base + "/chat/completions"
+            headers["Authorization"] = f"Bearer {c.api_key}"
+            body = {
+                "model": c.model,
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                "response_format": {"type": "json_object"},
+                "max_tokens": c.max_tokens,
+                "stream": False,
             }
         started = time.monotonic()
         with httpx.Client(
@@ -190,10 +204,15 @@ class LLMClient:
                     for p in candidates[0]["content"]["parts"]
                     if not p.get("thought")
                 )
-            else:
+            elif self.config.provider == "claude":
                 if raw.get("stop_reason") != "end_turn":
                     raise ModelError("Claude 输出被截断、拒绝或未完成。")
                 text = "".join(p["text"] for p in raw.get("content", []) if p.get("type") == "text")
+            else:
+                choices = raw.get("choices", [])
+                if not choices or choices[0].get("finish_reason") != "stop":
+                    raise ModelError("DeepSeek 输出被截断、拒绝或未完成。")
+                text = choices[0].get("message", {}).get("content", "")
             if not text.strip():
                 raise ModelError("模型没有返回可用文本。")
             return text
